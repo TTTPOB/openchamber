@@ -1,0 +1,214 @@
+name: Release fork VSIX
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'Published upstream tag, for example v1.16.3. Leave empty for the latest stable release.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-vscode-fork
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      asset_name: ${{ steps.release.outputs.asset_name }}
+      fork_tag: ${{ steps.release.outputs.fork_tag }}
+      should_publish: ${{ steps.release.outputs.should_publish }}
+      upstream_commit: ${{ steps.release.outputs.upstream_commit }}
+      upstream_tag: ${{ steps.release.outputs.upstream_tag }}
+      upstream_version: ${{ steps.release.outputs.upstream_version }}
+    steps:
+      - name: Resolve published upstream VSIX release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG_INPUT: ${{ inputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+
+          upstream_repository='openchamber/openchamber'
+          requested_tag="${UPSTREAM_TAG_INPUT:-}"
+          if [[ -n "$requested_tag" ]]; then
+            if [[ ! "$requested_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "upstream_tag must be a stable tag such as v1.16.3" >&2
+              exit 1
+            fi
+            release_json="$(gh api -H 'Accept: application/vnd.github+json' "repos/$upstream_repository/releases/tags/$requested_tag")"
+          else
+            release_json="$(gh api -H 'Accept: application/vnd.github+json' "repos/$upstream_repository/releases/latest")"
+          fi
+
+          upstream_tag="$(jq -er '.tag_name' <<<"$release_json")"
+          if [[ ! "$upstream_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "upstream release $upstream_tag is not a stable vMAJOR.MINOR.PATCH tag" >&2
+            exit 1
+          fi
+          if [[ "$(jq -r '.draft' <<<"$release_json")" != false ]] || \
+             [[ "$(jq -r '.prerelease' <<<"$release_json")" != false ]] || \
+             [[ -z "$(jq -r '.published_at // empty' <<<"$release_json")" ]]; then
+            echo "upstream release $upstream_tag is draft, prerelease, or unpublished" >&2
+            exit 1
+          fi
+
+          upstream_version="${upstream_tag#v}"
+          asset_name="openchamber-vscode-fork-$upstream_tag.vsix"
+          expected_upstream_asset="openchamber-$upstream_version.vsix"
+          if ! jq -e --arg asset "$expected_upstream_asset" '.assets | any(.name == $asset)' <<<"$release_json" >/dev/null; then
+            echo "upstream release $upstream_tag does not contain $expected_upstream_asset" >&2
+            exit 1
+          fi
+
+          upstream_commit="$(gh api -H 'Accept: application/vnd.github+json' "repos/$upstream_repository/commits/$upstream_tag" --jq '.sha')"
+          fork_tag="vscode-fork-$upstream_tag"
+          release_file="$RUNNER_TEMP/existing-fork-release.json"
+          if ! status_code="$(curl --silent --show-error --output "$release_file" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$fork_tag")"; then
+            echo "failed to check fork release $fork_tag" >&2
+            exit 1
+          fi
+          case "$status_code" in
+            404)
+              should_publish=true
+              ;;
+            200)
+              state="published"
+              if [[ "$(jq -r '.draft' "$release_file")" == true ]]; then
+                state='draft'
+              elif [[ "$(jq -r '.prerelease' "$release_file")" == true ]]; then
+                state='prerelease'
+              fi
+              echo "fork release $fork_tag already exists as $state; skipping"
+              should_publish=false
+              ;;
+            *)
+              echo "failed to check fork release $fork_tag: HTTP $status_code" >&2
+              cat "$release_file" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "asset_name=$asset_name"
+            echo "fork_tag=$fork_tag"
+            echo "should_publish=$should_publish"
+            echo "upstream_commit=$upstream_commit"
+            echo "upstream_tag=$upstream_tag"
+            echo "upstream_version=$upstream_version"
+          } >> "$GITHUB_OUTPUT"
+
+  build-and-release:
+    needs: resolve
+    if: needs.resolve.outputs.should_publish == 'true'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork patch set
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.3.14'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      - name: Clone exact upstream source
+        env:
+          UPSTREAM_COMMIT: ${{ needs.resolve.outputs.upstream_commit }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+
+          source_directory="$RUNNER_TEMP/openchamber-upstream"
+          git clone --depth 1 --branch "$UPSTREAM_TAG" https://github.com/openchamber/openchamber.git "$source_directory"
+          test "$(git -C "$source_directory" rev-parse HEAD)" = "$UPSTREAM_COMMIT"
+
+      - name: Apply fork customizations
+        run: |
+          set -euo pipefail
+
+          source_directory="$RUNNER_TEMP/openchamber-upstream"
+          patch_file="$GITHUB_WORKSPACE/patches/vscode-fork-customizations.patch"
+          git -C "$source_directory" apply --check "$patch_file"
+          git -C "$source_directory" apply --whitespace=error "$patch_file"
+          git -C "$source_directory" diff --check
+
+      - name: Install dependencies
+        working-directory: ${{ runner.temp }}/openchamber-upstream
+        run: bun install --frozen-lockfile
+
+      - name: Test and package VSIX
+        working-directory: ${{ runner.temp }}/openchamber-upstream
+        run: |
+          set -euo pipefail
+
+          bun test packages/ui/src/lib/fontOptions.test.ts packages/vscode/src/bridge-system-runtime.test.js
+          bun run --cwd packages/vscode type-check
+          bun run --cwd packages/vscode package
+
+      - name: Prepare release asset
+        env:
+          ASSET_NAME: ${{ needs.resolve.outputs.asset_name }}
+          UPSTREAM_VERSION: ${{ needs.resolve.outputs.upstream_version }}
+        run: |
+          set -euo pipefail
+
+          source_asset="$RUNNER_TEMP/openchamber-upstream/packages/vscode/openchamber-$UPSTREAM_VERSION.vsix"
+          test -s "$source_asset"
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp "$source_asset" "$GITHUB_WORKSPACE/artifacts/$ASSET_NAME"
+
+      - name: Create fork release
+        env:
+          ASSET_NAME: ${{ needs.resolve.outputs.asset_name }}
+          FORK_TAG: ${{ needs.resolve.outputs.fork_tag }}
+          GITHUB_TOKEN: ${{ github.token }}
+          UPSTREAM_COMMIT: ${{ needs.resolve.outputs.upstream_commit }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+
+          created_release=false
+          cleanup() {
+            status=$?
+            if [[ "$status" -ne 0 && "$created_release" == true ]]; then
+              gh release delete "$FORK_TAG" --repo "$GITHUB_REPOSITORY" --yes || true
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          notes_file="$RUNNER_TEMP/vscode-fork-release-notes.md"
+          printf 'Fork VSIX built from upstream [%s](https://github.com/openchamber/openchamber/tree/%s).\n\nApplied customizations:\n\n- Open notebook links with VS Code\x27s notebook editor.\n- Use the VS Code editor font in the shared webview UI.\n\nSource commit: `%s`\n' \
+            "$UPSTREAM_TAG" "$UPSTREAM_TAG" "$UPSTREAM_COMMIT" > "$notes_file"
+
+          gh release create "$FORK_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --draft \
+            --latest=false \
+            --title "OpenChamber VS Code fork $UPSTREAM_TAG" \
+            --notes-file "$notes_file"
+          created_release=true
+          gh release upload "$FORK_TAG" "$GITHUB_WORKSPACE/artifacts/$ASSET_NAME" --repo "$GITHUB_REPOSITORY"
+          gh release edit "$FORK_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          created_release=false
