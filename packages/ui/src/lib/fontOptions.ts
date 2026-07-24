@@ -79,7 +79,7 @@ export const UI_FONT_OPTIONS: FontOptionDefinition<UiFontOption>[] = [
         id: 'system',
         label: 'System',
         description: 'Native operating system interface font.',
-        stack: 'var(--vscode-editor-font-family, var(--vscode-font-family, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif))'
+        stack: '"SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
     }
 ];
 
@@ -144,7 +144,7 @@ export const CODE_FONT_OPTIONS: FontOptionDefinition<MonoFontOption>[] = [
         id: 'system-mono',
         label: 'System Mono',
         description: 'Native operating system monospace font.',
-        stack: 'var(--vscode-editor-font-family, ui-monospace, "SFMono-Regular", "Menlo", "Cascadia Mono", "Segoe UI Mono", monospace)'
+        stack: 'ui-monospace, "SFMono-Regular", "Menlo", "Cascadia Mono", "Segoe UI Mono", monospace'
     }
 ];
 

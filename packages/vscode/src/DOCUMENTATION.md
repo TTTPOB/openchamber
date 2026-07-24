@@ -68,3 +68,7 @@ When adding new bridge route families:
 1. Prefer creating or extending a domain runtime module under `packages/vscode/src/bridge-*-runtime.ts`.
 2. Keep `bridge.ts` focused on delegation order and minimal fallthrough behavior.
 3. Inject dependencies into runtimes instead of reaching into unrelated modules directly.
+
+## Webview fonts
+
+`webview/fontOverrides.ts` owns the VS Code-specific mapping for shared System font choices. It maps System UI to the webview workbench font variable and System Mono to the editor font variable after shared React font effects update inline styles. Other runtimes and non-system font choices retain the shared font stacks.
