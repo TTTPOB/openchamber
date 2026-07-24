@@ -61,7 +61,8 @@ jobs:
           fi
 
           upstream_version="${upstream_tag#v}"
-          asset_name="openchamber-vscode-fork-$upstream_tag.vsix"
+          customization_revision='r1'
+          asset_name="openchamber-vscode-fork-$upstream_tag-$customization_revision.vsix"
           expected_upstream_asset="openchamber-$upstream_version.vsix"
           if ! jq -e --arg asset "$expected_upstream_asset" '.assets | any(.name == $asset)' <<<"$release_json" >/dev/null; then
             echo "upstream release $upstream_tag does not contain $expected_upstream_asset" >&2
@@ -69,7 +70,7 @@ jobs:
           fi
 
           upstream_commit="$(gh api -H 'Accept: application/vnd.github+json' "repos/$upstream_repository/commits/$upstream_tag" --jq '.sha')"
-          fork_tag="vscode-fork-$upstream_tag"
+          fork_tag="vscode-fork-$upstream_tag-$customization_revision"
           release_file="$RUNNER_TEMP/existing-fork-release.json"
           if ! status_code="$(curl --silent --show-error --output "$release_file" --write-out '%{http_code}' \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
@@ -116,11 +117,6 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout fork patch set
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -131,7 +127,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Clone exact upstream source
+      - name: Prepare exact upstream source with fork commits
         env:
           UPSTREAM_COMMIT: ${{ needs.resolve.outputs.upstream_commit }}
           UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
@@ -139,18 +135,56 @@ jobs:
           set -euo pipefail
 
           source_directory="$RUNNER_TEMP/openchamber-upstream"
-          git clone --depth 1 --branch "$UPSTREAM_TAG" https://github.com/openchamber/openchamber.git "$source_directory"
-          test "$(git -C "$source_directory" rev-parse HEAD)" = "$UPSTREAM_COMMIT"
+          fork_remote='fork'
+          fork_main_ref="refs/remotes/$fork_remote/main"
+          customization_commits=(
+            49041dd65b566ba34cbce230c6721b9c266a39a1
+            a5f95e727145aa336d7bb0c480db14bbd7a692cc
+            4b498ca21e837f484e9bb38dd86c35b4d37799a1
+          )
 
-      - name: Apply fork customizations
-        run: |
-          set -euo pipefail
+          if ! git clone --depth 1 --single-branch --branch "$UPSTREAM_TAG" https://github.com/openchamber/openchamber.git "$source_directory"; then
+            echo "failed to clone upstream release tag $UPSTREAM_TAG" >&2
+            exit 1
+          fi
 
-          source_directory="$RUNNER_TEMP/openchamber-upstream"
-          patch_file="$GITHUB_WORKSPACE/patches/vscode-fork-customizations.patch"
-          git -C "$source_directory" apply --check "$patch_file"
-          git -C "$source_directory" apply --whitespace=error "$patch_file"
-          git -C "$source_directory" diff --check
+          checked_out_commit="$(git -C "$source_directory" rev-parse HEAD)"
+          if [[ "$checked_out_commit" != "$UPSTREAM_COMMIT" ]]; then
+            echo "upstream tag $UPSTREAM_TAG resolved to $checked_out_commit, expected $UPSTREAM_COMMIT" >&2
+            exit 1
+          fi
+
+          git -C "$source_directory" remote add "$fork_remote" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          if ! git -C "$source_directory" fetch --no-tags --no-recurse-submodules "$fork_remote" \
+            "refs/heads/main:$fork_main_ref"; then
+            echo "failed to fetch main from fork $GITHUB_REPOSITORY" >&2
+            exit 1
+          fi
+
+          for commit in "${customization_commits[@]}"; do
+            if ! git -C "$source_directory" cat-file -e "$commit^{commit}"; then
+              echo "required customization commit $commit was not fetched from $GITHUB_REPOSITORY main" >&2
+              exit 1
+            fi
+            if ! git -C "$source_directory" merge-base --is-ancestor "$commit" "$fork_main_ref"; then
+              echo "required customization commit $commit is not reachable from $GITHUB_REPOSITORY main" >&2
+              exit 1
+            fi
+          done
+
+          git -C "$source_directory" config user.name 'github-actions[bot]'
+          git -C "$source_directory" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          for commit in "${customization_commits[@]}"; do
+            if ! git -C "$source_directory" cherry-pick "$commit"; then
+              echo "failed to cherry-pick customization commit $commit onto upstream $UPSTREAM_TAG ($UPSTREAM_COMMIT)" >&2
+              git -C "$source_directory" status --short >&2 || true
+              git -C "$source_directory" cherry-pick --abort || true
+              exit 1
+            fi
+          done
+
+          git -C "$source_directory" show --check --oneline --no-renames HEAD~3..HEAD
 
       - name: Install dependencies
         working-directory: ${{ runner.temp }}/openchamber-upstream
@@ -161,7 +195,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          bun test packages/ui/src/lib/fontOptions.test.ts packages/vscode/src/bridge-system-runtime.test.js
+          bun test packages/vscode/webview/fontOverrides.test.ts packages/vscode/src/bridge-system-runtime.test.js
           bun run --cwd packages/vscode type-check
           bun run --cwd packages/vscode package
 
@@ -198,7 +232,7 @@ jobs:
           trap cleanup EXIT
 
           notes_file="$RUNNER_TEMP/vscode-fork-release-notes.md"
-          printf 'Fork VSIX built from upstream [%s](https://github.com/openchamber/openchamber/tree/%s).\n\nApplied customizations:\n\n- Open notebook links with VS Code\x27s notebook editor.\n- Use the VS Code editor font in the shared webview UI.\n\nSource commit: `%s`\n' \
+          printf 'Fork VSIX built from upstream [%s](https://github.com/openchamber/openchamber/tree/%s).\n\nApplied customizations:\n\n- Open notebook links with VS Code\x27s notebook editor.\n- Match the System UI font to the VS Code workbench UI font.\n- Match the System Mono font to the VS Code editor font.\n\nSource commit: `%s`\n' \
             "$UPSTREAM_TAG" "$UPSTREAM_TAG" "$UPSTREAM_COMMIT" > "$notes_file"
 
           gh release create "$FORK_TAG" \
