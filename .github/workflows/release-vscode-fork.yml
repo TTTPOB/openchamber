@@ -141,6 +141,9 @@ jobs:
             49041dd65b566ba34cbce230c6721b9c266a39a1
             a5f95e727145aa336d7bb0c480db14bbd7a692cc
             4b498ca21e837f484e9bb38dd86c35b4d37799a1
+            2afd95d1042533c794f8b61fc9b1fd9b500ba260
+            5377f797f39323a7f6469a03a8070db9a24166e4
+            e2b6d7e6801031af2ff27ab8882dbf3942c905ba
           )
 
           if ! git clone --depth 1 --single-branch --branch "$UPSTREAM_TAG" https://github.com/openchamber/openchamber.git "$source_directory"; then
@@ -232,7 +235,7 @@ jobs:
           trap cleanup EXIT
 
           notes_file="$RUNNER_TEMP/vscode-fork-release-notes.md"
-          printf 'Fork VSIX built from upstream [%s](https://github.com/openchamber/openchamber/tree/%s).\n\nApplied customizations:\n\n- Open notebook links with VS Code\x27s notebook editor.\n- Match the System UI font to the VS Code workbench UI font.\n- Match the System Mono font to the VS Code editor font.\n\nSource commit: `%s`\n' \
+          printf 'Fork VSIX built from upstream [%s](https://github.com/openchamber/openchamber/tree/%s).\n\nApplied customizations:\n\n- Open notebook links with VS Code\x27s notebook editor.\n- Match the System UI font to the VS Code workbench UI font.\n- Match the System Mono font to the VS Code editor font.\n- Reuse the OpenCode output channel across restarts.\n- Clear the splash overlay once the webview is ready and OpenCode is connected.\n- Keep the empty composer caret visible.\n\nSource commit: `%s`\n' \
             "$UPSTREAM_TAG" "$UPSTREAM_TAG" "$UPSTREAM_COMMIT" > "$notes_file"
 
           gh release create "$FORK_TAG" \
