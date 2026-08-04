@@ -146,6 +146,17 @@ export interface GetGitDiffOptions {
   contextLines?: number;
 }
 
+/**
+ * Diff between two refs. Uses three-dot (`base...head`) semantics server-side, so changes
+ * pulled into `head` by merging `base` are excluded — only the branch's own work is returned.
+ */
+export interface GetGitRangeDiffOptions {
+  base: string;
+  head: string;
+  path?: string;
+  contextLines?: number;
+}
+
 export interface GitFileDiffResponse {
   original: string;
   modified: string;
@@ -453,6 +464,7 @@ export interface GitAPI {
   getGitStatus(directory: string, options?: { mode?: 'light' }): Promise<GitStatus>;
   getGitDiff(directory: string, options: GetGitDiffOptions): Promise<GitDiffResponse>;
   getGitFileDiff(directory: string, options: GetGitFileDiffOptions): Promise<GitFileDiffResponse>;
+  getGitRangeDiff?(directory: string, options: GetGitRangeDiffOptions): Promise<GitDiffResponse>;
   revertGitFile(directory: string, filePath: string, options?: { scope?: 'all' | 'working' }): Promise<void>;
   stageGitFile(directory: string, filePath: string): Promise<void>;
   stageGitFiles?(directory: string, filePaths: string[]): Promise<void>;
@@ -637,6 +649,7 @@ export interface SettingsPayload {
   nativeNotificationsEnabled?: boolean;
   notificationMode?: 'always' | 'hidden-only';
   autoDeleteEnabled?: boolean;
+  autoSaveEnabled?: boolean;
   autoDeleteAfterDays?: number;
   sessionRetentionAction?: 'archive' | 'delete';
   followUpBehavior?: 'steer' | 'queue';
@@ -676,6 +689,7 @@ export interface SettingsPayload {
   pwaAppName?: string;
   mobileKeyboardMode?: 'native' | 'resize-content';
   draftStarters?: DraftStarterRef[];
+  draftStartersVisible?: boolean;
   draftStartersCraftGoalAdded?: boolean;
 
   [key: string]: unknown;
@@ -777,6 +791,11 @@ export interface ApnsTokenPayload {
   token: string;
   /** 'ios' (APNs) or 'android' (FCM) — lets the relay route the token to the right service. */
   platform?: string;
+  /**
+   * APNs environment the token belongs to: 'sandbox' for Xcode/dev-signed installs,
+   * 'production' for TestFlight/App Store. Omitted when unknown (server defaults to production).
+   */
+  environment?: 'sandbox' | 'production';
 }
 
 export interface PushAPI {
@@ -803,17 +822,24 @@ type GitHubRepoRef = {
   url: string;
 };
 
-type GitHubChecksSummary = {
+export type GitHubChecksSummary = {
   state: 'success' | 'failure' | 'pending' | 'unknown';
   total: number;
   success: number;
   failure: number;
+  /** queued + in_progress + unconcluded runs. */
   pending: number;
+  inProgress?: number;
+  queued?: number;
+  /** Earliest started_at among in-progress runs (ISO), for elapsed display. */
+  startedAt?: string;
 };
 
 export type GitHubCheckRun = {
   id?: number;
   name: string;
+  startedAt?: string;
+  completedAt?: string;
   app?: {
     name?: string;
     slug?: string;
@@ -831,6 +857,7 @@ export type GitHubCheckRun = {
     jobId?: number;
     url?: string;
     name?: string;
+    workflowName?: string;
     conclusion?: string | null;
     steps?: Array<{
       name: string;
@@ -915,6 +942,8 @@ export type GitHubPullRequestsListResult = {
 
 export type GitHubPullRequestContextResult = {
   connected: boolean;
+  /** Server-side stamp of when the data was fetched from GitHub (ms epoch); survives server cache serves. */
+  fetchedAt?: number;
   repo?: GitHubRepoRef | null;
   pr?: GitHubPullRequestSummary | null;
   issueComments?: GitHubIssueComment[];
@@ -927,6 +956,8 @@ export type GitHubPullRequestContextResult = {
 
 export type GitHubPullRequestStatus = {
   connected: boolean;
+  /** Server-side stamp of when the data was fetched from GitHub (ms epoch); survives server cache serves. */
+  fetchedAt?: number;
   repo?: GitHubRepoRef | null;
   branch?: string;
   pr?: GitHubPullRequest | null;
