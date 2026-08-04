@@ -144,6 +144,7 @@ jobs:
             2afd95d1042533c794f8b61fc9b1fd9b500ba260
             5377f797f39323a7f6469a03a8070db9a24166e4
             e2b6d7e6801031af2ff27ab8882dbf3942c905ba
+            4637c8d4341eebbf01b0d12a10addd2a96047cce
           )
 
           if ! git clone --depth 1 --single-branch --branch "$UPSTREAM_TAG" https://github.com/openchamber/openchamber.git "$source_directory"; then
