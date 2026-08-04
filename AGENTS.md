@@ -6,6 +6,49 @@ OpenChamber provides shared web, desktop, VS Code, hosted-mobile, and native-mob
 
 This file contains only always-on repository rules and routing. Detailed workflows belong to project skills and module documentation.
 
+## TTTPOB Fork Workflow
+
+This repository is TTTPOB's dogfood fork for fixes and small features that have
+not been merged upstream. Use this workflow when TTTPOB asks an agent to turn a
+dogfood finding into a change or an upstream pull request. These scoped rules
+override the general local-validation and PR-reporting defaults below for that
+work only.
+
+### Implementing A Dogfood Change
+
+1. Fetch `origin`, which tracks `openchamber/openchamber`, and start a dedicated
+   branch from `origin/main`. Do not base an upstreamable change on the fork's
+   `main`, which also carries fork-only release and CI commits.
+2. If the fix already exists on `main` or another local branch, rebase or
+   cherry-pick only the relevant commit onto the clean branch. Preserve all
+   unrelated fork work.
+3. Load the required project skills and documentation, identify the owning
+   module, and make the smallest complete fix or feature. Keep non-obvious
+   dogfood workarounds documented with succinct English comments.
+4. Inspect the final diff against `origin/main` and keep one focused commit per
+   independently reviewable change. Do not include fork release workflows,
+   packaging changes, or another dogfood fix in the same upstream branch.
+5. Do not run local tests, type-checks, lint, builds, packaging, or VSIX creation
+   unless TTTPOB explicitly asks. The fork's CI owns automated validation for
+   this workflow.
+
+### Submitting An Upstream PR
+
+1. Before pushing, inspect `git status`, the commits in `origin/main..HEAD`, and
+   `git diff origin/main...HEAD`. The PR must contain only the intended change.
+2. Push the branch to the `fork` remote and create the PR against
+   `openchamber/openchamber` with base `main` and head `TTTPOB:<branch>`.
+3. Read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`, then complete
+   every PR section with the intent, non-goals, affected surfaces, applicable
+   guidance, positive manual or source-inspection evidence, and concrete risks.
+   Never invent validation evidence.
+4. Do not mention that local tests, builds, lint, type-checks, or packaging were
+   not run. CI reports automated validation. TTTPOB supplies screenshots or
+   recordings; leave the Visual evidence section as "Before/after evidence will
+   be added to this PR" until those assets are attached.
+5. Return the upstream PR URL to TTTPOB. Do not push fork `main`, merge the PR,
+   or modify release branches unless TTTPOB separately requests it.
+
 ## Instruction Order
 
 These steps are mandatory. Before editing, you **MUST**:
